@@ -155,11 +155,10 @@ decl_module! {
 		fn set_name(origin, first: Vec<u8>, last: Option<Vec<u8>>) {
 			let sender = ensure_signed(origin)?;
 
-			let len;
-			match last {
-				None => len = first.len(),
-				Some(ref last_name) => len = first.len() + last_name.len(),
-			}
+			let len = match last {
+				None => first.len(),
+				Some(ref last_name) => first.len() + last_name.len(),
+			};
 
 			ensure!(len <= T::MaxLength::get(), Error::<T>::TooLong);
 
