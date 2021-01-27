@@ -281,8 +281,9 @@ pub mod migration {
 			frame_support::debug::info!(" >>> Updating MyNicks storage...");
 			let mut count: u64 = 0;
 
-			// We remove the nicks from the old storage and insert into the new storage.
+			// We remove the nicks from the old storage via `drain`.
 			for (key, (nick, deposit)) in deprecated::NameOf::<T>::drain() {
+				// We split the nick at ' ' (<space>).
 				match nick.iter().rposition(|&x| x == b" "[0]) {
 					Some(ndx) => NameOf::<T>::insert(&key, (Nickname {
 						first: nick[0..ndx].to_vec(),
