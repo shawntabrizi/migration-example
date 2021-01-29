@@ -1,6 +1,7 @@
-# Substrate Node Template
+# Substrate Migration Example
+> **NOTE: Work in Progress**
 
-A fresh FRAME-based [Substrate](https://www.substrate.io/) node, ready for hacking :rocket:
+A FRAME-based [Substrate](https://www.substrate.io/) node based on the Node Template that includes a modified version of the Nicks pallet.
 
 ## Getting Started
 
