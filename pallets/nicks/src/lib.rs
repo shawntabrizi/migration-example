@@ -283,20 +283,18 @@ pub mod migration {
 			frame_support::debug::info!(" >>> Updating MyNicks storage. Migrating {} nicknames...", count);
 
 			// We transform the storage values from the old into the new format.
-			NameOf::<T>::translate::<Option<(Vec<u8>, BalanceOf<T>)>, _>(
-				|k, v| {
-					v.map(|(nick, deposit)|{
-						frame_support::debug::info!("     Migrated nickname for {:?}...", k);
+			NameOf::<T>::translate::<(Vec<u8>, BalanceOf<T>), _>(
+				|k: T::AccountId, (nick, deposit): (Vec<u8>, BalanceOf<T>)| {
+					frame_support::debug::info!("     Migrated nickname for {:?}...", k);
 
-						// We split the nick at ' ' (<space>).
-						match nick.iter().rposition(|&x| x == b" "[0]) {
-							Some(ndx) => (Nickname {
-								first: nick[0..ndx].to_vec(),
-								last: Some(nick[ndx + 1..].to_vec())
-							}, deposit),
-							None => (Nickname { first: nick, last: None }, deposit)
-						}
-					})
+					// We split the nick at ' ' (<space>).
+					match nick.iter().rposition(|&x| x == b" "[0]) {
+						Some(ndx) => Some((Nickname {
+							first: nick[0..ndx].to_vec(),
+							last: Some(nick[ndx + 1..].to_vec())
+						}, deposit)),
+						None => Some((Nickname { first: nick, last: None }, deposit))
+					}
 				}
 			);
 
