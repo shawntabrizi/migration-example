@@ -278,26 +278,32 @@ pub mod migration {
 
 		// Storage migrations should use storage versions for safety.
 		if PalletVersion::get() == StorageVersion::V1Bytes {
-			frame_support::debug::info!(" >>> Updating MyNicks storage...");
-			let mut count: u64 = 0;
+			// Very inefficient, mostly here for illustration purposes.
+			let count = deprecated::NameOf::<T>::iter().count();
+			frame_support::debug::info!(" >>> Updating MyNicks storage. Migrating {} nicknames...", count);
 
-			// We remove the nicks from the old storage via `drain`.
-			for (key, (nick, deposit)) in deprecated::NameOf::<T>::drain() {
-				// We split the nick at ' ' (<space>).
-				match nick.iter().rposition(|&x| x == b" "[0]) {
-					Some(ndx) => NameOf::<T>::insert(&key, (Nickname {
-						first: nick[0..ndx].to_vec(),
-						last: Some(nick[ndx + 1..].to_vec())
-					}, deposit)),
-					None => NameOf::<T>::insert(&key, (Nickname { first: nick, last: None }, deposit))
+			// We transform the storage values from the old into the new format.
+			NameOf::<T>::translate::<Option<(Vec<u8>, BalanceOf<T>)>, _>(
+				|k, v| {
+					v.map(|(nick, deposit)|{
+						frame_support::debug::info!("     Migrated nickname for {:?}...", k);
+
+						// We split the nick at ' ' (<space>).
+						match nick.iter().rposition(|&x| x == b" "[0]) {
+							Some(ndx) => (Nickname {
+								first: nick[0..ndx].to_vec(),
+								last: Some(nick[ndx + 1..].to_vec())
+							}, deposit),
+							None => (Nickname { first: nick, last: None }, deposit)
+						}
+					})
 				}
-
-				frame_support::debug::info!("     Migrated nickname for {:?}...", key);
-				count += 1;
-			}
+			);
 
 			// Update storage version.
 			PalletVersion::put(StorageVersion::V2Struct);
+			// Very inefficient, mostly here for illustration purposes.
+			let count = NameOf::<T>::iter().count();
 			frame_support::debug::info!(" <<< MyNicks storage updated! Migrated {} nicknames ✅", count);
 
 			// Return the weight consumed by the migration.
