@@ -47,7 +47,7 @@ use sp_runtime::{
 };
 use frame_support::{
 	decl_module, decl_event, decl_storage, ensure, decl_error,
-	traits::{Currency, EnsureOrigin, ReservableCurrency, OnUnbalanced, Get},
+	traits::{Currency, EnsureOrigin, ReservableCurrency, OnUnbalanced, Get}, weights::Weight,
 };
 use frame_system::ensure_signed;
 
@@ -305,7 +305,7 @@ pub mod migration {
 			frame_support::debug::info!(" <<< MyNicks storage updated! Migrated {} nicknames ✅", count);
 
 			// Return the weight consumed by the migration.
-			T::DbWeight::get().reads_writes(2, 3)
+			T::DbWeight::get().reads_writes(count as Weight + 1, count as Weight + 1)
 		} else {
 			frame_support::debug::info!(" >>> Unused migration!");
 			0
