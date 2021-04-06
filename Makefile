@@ -17,3 +17,7 @@ run:
 .PHONY: build
 build:
 	 cargo build --release
+
+.PHONY: run-pre
+run-pre:
+	 cargo run --release -- --chain='nicks-pre.chainspec.json' --tmp -lruntime=debug --alice
