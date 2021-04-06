@@ -1,7 +1,7 @@
 # Substrate Migration Example
 
 This repo demonstrates a simple runtime migration.
-The intention is to migrate from the state of the `pre-migration` branch to `post-migration`.
+The intention is to migrate from the state of the `pre-migration` branch to `post-migration` (See the diff [here](https://github.com/substrate-developer-hub/migration-example/pull/2/files)).
 
 The repo contains contains a FRAME-based [Substrate](https://www.substrate.io/) node based on the
 Node Template that includes a modified version of the Nicks pallet (the pallet was changed to store
