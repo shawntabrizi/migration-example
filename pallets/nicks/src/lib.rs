@@ -47,7 +47,7 @@ use sp_runtime::{
 };
 use frame_support::{
 	decl_module, decl_event, decl_storage, ensure, decl_error,
-	traits::{Currency, EnsureOrigin, ReservableCurrency, OnUnbalanced, Get},
+	traits::{Currency, EnsureOrigin, ReservableCurrency, OnUnbalanced, Get}, weights::Weight,
 };
 use frame_system::ensure_signed;
 
@@ -74,10 +74,26 @@ pub trait Trait: frame_system::Trait {
 	type MaxLength: Get<usize>;
 }
 
+/// A nickname with a first and last part.
+#[derive(codec::Encode, codec::Decode, Default, frame_support::RuntimeDebug, PartialEq)]
+pub struct Nickname {
+	first: Vec<u8>,
+	last: Option<Vec<u8>>,
+}
+
+/// Utility type for managing upgrades/migrations.
+#[derive(codec::Encode, codec::Decode, Clone, frame_support::RuntimeDebug, PartialEq)]
+pub enum StorageVersion {
+	V1Bytes,
+	V2Struct,
+}
+
 decl_storage! {
 	trait Store for Module<T: Trait> as MyNicks {
 		/// The lookup table for names.
-		NameOf: map hasher(twox_64_concat) T::AccountId => Option<(Vec<u8>, BalanceOf<T>)>;
+		NameOf: map hasher(twox_64_concat) T::AccountId => Option<(Nickname, BalanceOf<T>)>;
+		/// The current version of the pallet.
+		PalletVersion: StorageVersion = StorageVersion::V1Bytes;
 	}
 }
 
@@ -136,10 +152,15 @@ decl_module! {
 		/// - One event.
 		/// # </weight>
 		#[weight = 50_000_000]
-		fn set_name(origin, name: Vec<u8>) {
+		fn set_name(origin, first: Vec<u8>, last: Option<Vec<u8>>) {
 			let sender = ensure_signed(origin)?;
 
-			ensure!(name.len() <= T::MaxLength::get(), Error::<T>::TooLong);
+			let len = match last {
+				None => first.len(),
+				Some(ref last_name) => first.len() + last_name.len(),
+			};
+
+			ensure!(len <= T::MaxLength::get(), Error::<T>::TooLong);
 
 			let deposit = if let Some((_, deposit)) = <NameOf<T>>::get(&sender) {
 				Self::deposit_event(RawEvent::NameChanged(sender.clone()));
@@ -151,7 +172,7 @@ decl_module! {
 				deposit
 			};
 
-			<NameOf<T>>::insert(&sender, (name, deposit));
+			<NameOf<T>>::insert(&sender, (Nickname { first, last }, deposit));
 		}
 
 		/// Clear an account's name and return the deposit. Fails if the account was not named.
@@ -215,14 +236,79 @@ decl_module! {
 		/// - One event.
 		/// # </weight>
 		#[weight = 70_000_000]
-		fn force_name(origin, target: <T::Lookup as StaticLookup>::Source, name: Vec<u8>) {
+		fn force_name(origin, target: <T::Lookup as StaticLookup>::Source, first: Vec<u8>, last: Option<Vec<u8>>) {
 			T::ForceOrigin::ensure_origin(origin)?;
 
 			let target = T::Lookup::lookup(target)?;
 			let deposit = <NameOf<T>>::get(&target).map(|x| x.1).unwrap_or_else(Zero::zero);
-			<NameOf<T>>::insert(&target, (name, deposit));
+			<NameOf<T>>::insert(&target, (Nickname { first, last }, deposit));
 
 			Self::deposit_event(RawEvent::NameForced(target));
+		}
+
+		fn on_runtime_upgrade() -> frame_support::weights::Weight {
+			migration::migrate_to_v2::<T>()
+		}
+	}
+}
+
+
+pub mod migration {
+	use super::*;
+
+	pub mod deprecated {
+		use crate::Trait;
+		use frame_support::{decl_module, decl_storage, traits::Currency};
+		use sp_std::prelude::*;
+
+		type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
+
+		decl_storage! {
+			trait Store for Module<T: Trait> as MyNicks {
+				pub NameOf: map hasher(twox_64_concat) T::AccountId => Option<(Vec<u8>, BalanceOf<T>)>;
+			}
+		}
+		decl_module! {
+			pub struct Module<T: Trait> for enum Call where origin: T::Origin { }
+		}
+	}
+
+	pub fn migrate_to_v2<T: Trait>() -> frame_support::weights::Weight {
+		frame_support::debug::RuntimeLogger::init();
+
+		// Storage migrations should use storage versions for safety.
+		if PalletVersion::get() == StorageVersion::V1Bytes {
+			// Very inefficient, mostly here for illustration purposes.
+			let count = deprecated::NameOf::<T>::iter().count();
+			frame_support::debug::info!(" >>> Updating MyNicks storage. Migrating {} nicknames...", count);
+
+			// We transform the storage values from the old into the new format.
+			NameOf::<T>::translate::<(Vec<u8>, BalanceOf<T>), _>(
+				|k: T::AccountId, (nick, deposit): (Vec<u8>, BalanceOf<T>)| {
+					frame_support::debug::info!("     Migrated nickname for {:?}...", k);
+
+					// We split the nick at ' ' (<space>).
+					match nick.iter().rposition(|&x| x == b" "[0]) {
+						Some(ndx) => Some((Nickname {
+							first: nick[0..ndx].to_vec(),
+							last: Some(nick[ndx + 1..].to_vec())
+						}, deposit)),
+						None => Some((Nickname { first: nick, last: None }, deposit))
+					}
+				}
+			);
+
+			// Update storage version.
+			PalletVersion::put(StorageVersion::V2Struct);
+			// Very inefficient, mostly here for illustration purposes.
+			let count = NameOf::<T>::iter().count();
+			frame_support::debug::info!(" <<< MyNicks storage updated! Migrated {} nicknames ✅", count);
+
+			// Return the weight consumed by the migration.
+			T::DbWeight::get().reads_writes(count as Weight + 1, count as Weight + 1)
+		} else {
+			frame_support::debug::info!(" >>> Unused migration!");
+			0
 		}
 	}
 }
@@ -326,7 +412,7 @@ mod tests {
 	#[test]
 	fn kill_name_should_work() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Nicks::set_name(Origin::signed(2), b"Dave".to_vec()));
+			assert_ok!(Nicks::set_name(Origin::signed(2), b"Dave".to_vec(), None));
 			assert_eq!(Balances::total_balance(&2), 10);
 			assert_ok!(Nicks::kill_name(Origin::signed(1), 2));
 			assert_eq!(Balances::total_balance(&2), 8);
@@ -338,30 +424,31 @@ mod tests {
 	fn force_name_should_work() {
 		new_test_ext().execute_with(|| {
 			assert_noop!(
-				Nicks::set_name(Origin::signed(2), b"Dr. David Brubeck, III".to_vec()),
+				Nicks::set_name(Origin::signed(2), b"Dr. David Brubeck, III".to_vec(), None),
 				Error::<Test>::TooLong,
 			);
 
-			assert_ok!(Nicks::set_name(Origin::signed(2), b"Dave".to_vec()));
+			assert_ok!(Nicks::set_name(Origin::signed(2), b"Dave".to_vec(), None));
 			assert_eq!(Balances::reserved_balance(2), 2);
-			assert_ok!(Nicks::force_name(Origin::signed(1), 2, b"Dr. David Brubeck, III".to_vec()));
+			assert_ok!(Nicks::force_name(Origin::signed(1), 2, b"Dr. David Brubeck, III".to_vec(), None));
 			assert_eq!(Balances::reserved_balance(2), 2);
-			assert_eq!(<NameOf<Test>>::get(2).unwrap(), (b"Dr. David Brubeck, III".to_vec(), 2));
+			assert_eq!(<NameOf<Test>>::get(2).unwrap().0.first, b"Dr. David Brubeck, III".to_vec());
+			assert_eq!(<NameOf<Test>>::get(2).unwrap().1, 2);
 		});
 	}
 
 	#[test]
 	fn normal_operation_should_work() {
 		new_test_ext().execute_with(|| {
-			assert_ok!(Nicks::set_name(Origin::signed(1), b"Gav".to_vec()));
+			assert_ok!(Nicks::set_name(Origin::signed(1), b"Gav".to_vec(), None));
 			assert_eq!(Balances::reserved_balance(1), 2);
 			assert_eq!(Balances::free_balance(1), 8);
-			assert_eq!(<NameOf<Test>>::get(1).unwrap().0, b"Gav".to_vec());
+			assert_eq!(<NameOf<Test>>::get(1).unwrap().0.first, b"Gav".to_vec());
 
-			assert_ok!(Nicks::set_name(Origin::signed(1), b"Gavin".to_vec()));
+			assert_ok!(Nicks::set_name(Origin::signed(1), b"Gavin".to_vec(), None));
 			assert_eq!(Balances::reserved_balance(1), 2);
 			assert_eq!(Balances::free_balance(1), 8);
-			assert_eq!(<NameOf<Test>>::get(1).unwrap().0, b"Gavin".to_vec());
+			assert_eq!(<NameOf<Test>>::get(1).unwrap().0.first, b"Gavin".to_vec());
 
 			assert_ok!(Nicks::clear_name(Origin::signed(1)));
 			assert_eq!(Balances::reserved_balance(1), 0);
@@ -375,17 +462,17 @@ mod tests {
 			assert_noop!(Nicks::clear_name(Origin::signed(1)), Error::<Test>::Unnamed);
 
 			assert_noop!(
-				Nicks::set_name(Origin::signed(3), b"Dave".to_vec()),
+				Nicks::set_name(Origin::signed(3), b"Dave".to_vec(), None),
 				pallet_balances::Error::<Test, _>::InsufficientBalance
 			);
 
 			assert_noop!(
-				Nicks::set_name(Origin::signed(1), b"Gavin James Wood, Esquire".to_vec()),
+				Nicks::set_name(Origin::signed(1), b"Gavin James Wood, Esquire".to_vec(), None),
 				Error::<Test>::TooLong
 			);
-			assert_ok!(Nicks::set_name(Origin::signed(1), b"Dave".to_vec()));
+			assert_ok!(Nicks::set_name(Origin::signed(1), b"Dave".to_vec(), None));
 			assert_noop!(Nicks::kill_name(Origin::signed(2), 1), BadOrigin);
-			assert_noop!(Nicks::force_name(Origin::signed(2), 1, b"Whatever".to_vec()), BadOrigin);
+			assert_noop!(Nicks::force_name(Origin::signed(2), 1, b"Whatever".to_vec(), None), BadOrigin);
 		});
 	}
 }
